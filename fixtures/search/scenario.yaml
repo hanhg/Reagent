@@ -1,0 +1,80 @@
+# Agent search demo: "I want a new agent" -> the closest existing one, by OUTCOME.
+#
+#   python -m runtime.api.search_demo            # files catalog, no database, no credits
+#   python -m runtime.api.search_demo --live     # + the model rewrite of a request (~$0.0002)
+#
+# Developers pick an agent for what it achieves, not how it is built. Every
+# query below is worded differently from the agent it should find, so a plain
+# substring search fails most of them. Users come from spec/examples:
+#   bob    member of platform-eng   (code-reviewer, pr-reviewer)
+#   dana   member of people-ops     (people-ops-bot)
+#   frank  enterprise admin         (everything, including meta-agents)
+
+# Act 1: describe the outcome, get the agent that achieves it
+search:
+  - who: bob
+    query: "catch secrets committed in pull requests"
+    expect_first: pr-reviewer
+    reason_has: ["secret"]
+  - who: bob
+    query: "review pull requests for bugs without false alarms"
+    expect_first: code-reviewer
+  - who: dana
+    query: "a bot that answers HR handbook questions"
+    expect_first: people-ops-bot
+  - who: frank
+    query: "make my agent cheaper without failing its evals"
+    expect_first: cost-optimizer
+  - who: frank
+    query: "explain why runs keep failing and suggest a fix"
+    expect_first: failure-triage
+  - who: frank
+    query: "check an agent has least privilege before publishing"
+    expect_first: security-reviewer
+
+# Act 2: different words, same outcome. "credentials" is never in the query.
+wording:
+  who: frank
+  query: "find leaked keys before they ship"
+  expect_in_top3: secret-scanner
+
+# Act 3: search never crosses a team boundary, not even in the ranking
+isolation:
+  who: bob
+  query: "answer HR handbook questions in Slack"
+  never: [people-ops-bot, agent-builder, secret-scanner]
+nothing:
+  who: bob
+  query: "zzqx flibbertigibbet"
+
+# Act 4: measured results break ties; they never outrank the right outcome.
+# The demo injects these numbers in place of the database's.
+tie_break:
+  who: bob
+  query: "review pull requests for bugs without false alarms"
+  measured:
+    code-reviewer: { pass_rate: 0.10, production_success_rate: 0.10 }
+    pr-reviewer:   { pass_rate: 1.00, production_success_rate: 1.00 }
+  expect_first: code-reviewer
+
+# Act 5: agent-builder's view of the same search, over the platform connector.
+# Runs before the fork, while the catalog is still exactly spec/examples.
+platform:
+  who: bob
+  query: "catch secrets committed in pull requests"
+  expect_first: pr-reviewer
+  agent: agent-builder
+
+# Act 7 (runs last): the New agent flow. Describe it, take the suggestion, fork it.
+# The fork exists only in this process (files catalog); nothing is written.
+fork:
+  who: bob
+  describe: "flag public S3 buckets in terraform PRs"
+  expect_suggestion: pr-reviewer
+  new_name: s3-acl-reviewer
+
+# Act 6 (--live only): a request, not an outcome, restated by gpt-oss-20b
+rewrite:
+  who: bob
+  query: "something that stops people pushing AWS keys into our terraform repos"
+  expect_first: pr-reviewer

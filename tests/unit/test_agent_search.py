@@ -72,7 +72,9 @@ def test_measured_results_only_break_ties(docs):
 
 @pytest.mark.parametrize("word,stem", [("request", "request"), ("requests", "request"),
                                        ("cheapest", "cheap"), ("committed", "commit"),
-                                       ("flagged", "flag"), ("queries", "query")])
+                                       ("flagged", "flag"), ("queries", "query"),
+                                       ("answers", "answer"), ("reviewers", "review"),
+                                       ("builder", "build")])
 def test_stemming(word, stem):
     assert s._stem(word) == stem
 
