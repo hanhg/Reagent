@@ -143,3 +143,52 @@ def test_already_running_names_the_pipeline_and_it_can_be_abandoned():
     assert client.post(f"/v0/publish-runs/{rid}/abandon", headers=H).json()["status"] == "abandoned"
     assert client.post("/v0/agents/pr-reviewer/publish", headers=H).status_code == 202
     STORE.runs.clear()
+
+
+def listing(user, **params):
+    r = client.get("/v0/agents", params=params, headers={"X-ReAgent-User": user})
+    assert r.status_code == 200
+    return {a["name"]: a for a in r.json()["agents"]}
+
+
+def test_collection_is_filtered_to_the_callers_team():
+    alice = listing("alice")
+    assert alice and all(a["team"] == "platform-eng" and a["level"] == "team" for a in alice.values())
+    assert "people-ops-bot" not in alice and "secret-scanner" not in alice
+    assert {"people-ops-bot", "secret-scanner", "pr-reviewer"} <= set(listing("frank"))
+    for a in alice.values():
+        assert {"name", "version", "description"} <= set(a) and isinstance(a["runs_30d"], int)
+
+
+def test_collection_search_and_tag_filter():
+    assert "pr-reviewer" in listing("alice", q="terraform")
+    assert listing("alice", q="no-such-outcome-anywhere") == {}
+    tagged = listing("alice", tag="security")
+    assert tagged and all("security" in a["tags"] for a in tagged.values())
+
+
+def test_agent_detail_carries_the_file_and_versions():
+    H = {"X-ReAgent-User": "alice"}
+    r = client.get("/v0/agents/pr-reviewer", headers=H)
+    assert r.status_code == 200
+    body = r.json()
+    assert "kind: Agent" in body["spec_yaml"] and body["level"] == "team"
+    assert body["versions"][0]["version"] == body["version"]
+    assert client.get("/v0/agents/people-ops-bot", headers=H).status_code == 404
+    assert client.get("/v0/agents/secret-scanner", headers=H).status_code == 404
+    assert client.get("/v0/agents/pr-reviewer").status_code == 403
+
+
+def test_every_route_the_dashboard_calls_is_served_by_the_runtime_app():
+    """The dashboard falls back to recorded fixtures on a 404 'Not Found', so a
+    missing route looks fine on screen. Catch it here instead."""
+    import re
+    pytest.importorskip("langchain")
+    from runtime.api.runs import app
+    client_ts = (ROOT / "dashboard" / "lib" / "api.ts").read_text(encoding="utf-8")
+    called = set(re.findall(r'api\.(GET|POST|PUT|DELETE)\("([^"]+)"', client_ts))
+    assert called
+    served = {(m.upper(), re.sub(r"\{[a-z_]+\}", "{}", path))
+              for path, ops in app.openapi()["paths"].items() for m in ops}
+    missing = sorted(f"{m} {p}" for m, p in called if (m, re.sub(r"\{[a-z_]+\}", "{}", p)) not in served)
+    assert not missing, f"dashboard calls routes the runtime does not serve: {missing}"

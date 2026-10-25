@@ -9,7 +9,7 @@ import { API_URL, DEMO_USERS, call, getDemoUser, listApprovals, setDemoUser, typ
 const sections = [
   { title: "Policy", links: [{ href: "/", label: "Resolved view" }, { href: "/hierarchy", label: "Hierarchy" }] },
   { title: "Agents", links: [{ href: "/agents", label: "Collection" }, { href: "/publish", label: "Publish pipeline" }] },
-  { title: "Runs", links: [{ href: "/traces", label: "Trace viewer" }, { href: "/approvals", label: "Approvals" }] },
+  { title: "Runs", links: [{ href: "/traces", label: "Trace viewer" }, { href: "/approvals", label: "Approvals" }, { href: "/analytics", label: "Analytics" }] },
 ];
 
 const isActive = (pathname: string, href: string) => href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`);

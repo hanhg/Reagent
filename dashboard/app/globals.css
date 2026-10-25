@@ -315,6 +315,10 @@ mark.redacted { padding: 0 4px; border-radius: 2px; background: var(--ink); colo
 /* Approvals */
 .approval-table .table-head, .approval-table .table-row { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.3fr) 130px 130px minmax(170px, 1fr); }
 .approval-table .text-button { margin-top: 6px; }
+.metrics-table { margin-bottom: 16px; }
+.metrics-table .table-head, .metrics-table .table-row { grid-template-columns: 110px 70px 80px 90px minmax(0, 1fr); align-items: center; }
+.metrics-tools .table-head, .metrics-tools .table-row { grid-template-columns: minmax(0, 2fr) 70px 70px; }
+.metrics-evals .table-head, .metrics-evals .table-row { grid-template-columns: minmax(0, 2fr) 110px; }
 .decision-cell { display: grid; gap: 8px; justify-items: start; }
 
 /* Editor */
@@ -414,6 +418,8 @@ mark.redacted { padding: 0 4px; border-radius: 2px; background: var(--ink); colo
   .table-head { display: none; }
   .table-row, .resolved-row, .trace-row, .case-row,
   .agent-table .table-row, .approval-table .table-row, .compact-table .table-row { grid-template-columns: 1fr; gap: 6px; }
+  .metrics-table .table-row { grid-template-columns: 1fr 1fr 1fr 1fr; }
+  .metrics-table .trace-bar { display: none; }
   .resolved-row { grid-template-columns: minmax(0, 1fr) 14px; }
   .resolved-row .layer-tag, .resolved-row .field-path, .resolved-row .value { grid-column: 1; }
   .resolved-row .icon { grid-column: 2; grid-row: 1; }

@@ -71,7 +71,10 @@ export default function EditorPage() {
 
   async function publish() {
     setPublishing(true); setPublishProblem(null);
-    const outcome = await call<{ publish_run_id: number }>(startPublish(name));
+    // Publish what is on screen once it resolves; otherwise the stored draft.
+    const stored = state.phase === "ready" ? state.data.spec_yaml : undefined;
+    const text = check.phase === "done" && check.valid && yaml && yaml !== stored ? yaml : undefined;
+    const outcome = await call<{ publish_run_id: number }>(startPublish(name, text));
     setPublishing(false);
     if (outcome.ok) router.push(`/publish?run=${outcome.data.publish_run_id}`);
     else setPublishProblem({ detail: outcome.detail, rejections: outcome.rejections });
@@ -115,7 +118,7 @@ export default function EditorPage() {
           <span className="rejection-meta"><code>{item.code}</code><span>line {lineFor(yaml, item.field)}</span><span>blocked by <b>{item.blocked_by}</b></span></span>
           <span>{item.message}</span>
         </button>)}
-        <p className="panel-note">Publishing runs the pipeline on the stored draft version of this agent, not on unsaved text here.</p>
+        <p className="panel-note">Publishing runs the pipeline on the text above when it resolves, and on the stored draft otherwise. Nothing is saved until the pipeline publishes.</p>
       </aside>
     </div>}
   </>;

@@ -8,10 +8,12 @@ export type RunResult = components["schemas"]["RunResult"];
 export type Approval = components["schemas"]["Approval"];
 export type PublishRun = components["schemas"]["PublishRun"];
 export type EvalReport = components["schemas"]["EvalReport"];
+export type Metrics = components["schemas"]["Metrics"];
 export type RunEvent = components["schemas"]["run_events.schema"];
 export type Trace = { run_id: number; children?: number[]; events: RunEvent[] };
 
-export const API_URL = process.env.NEXT_PUBLIC_REAGENT_API_URL ?? "http://localhost:8000";
+// The root .env names it NEXT_PUBLIC_API_URL; dashboard/.env.example names it NEXT_PUBLIC_REAGENT_API_URL.
+export const API_URL = process.env.NEXT_PUBLIC_REAGENT_API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 // The three log-in-as identities. Roles are enforced server-side; this only picks the header.
 export const DEMO_USERS = [
@@ -78,7 +80,9 @@ export const startRun = (name: string, input: Record<string, unknown>) =>
   api.POST("/v0/agents/{name}/runs", { params: { path: { name } }, body: { input: input as Record<string, never>, wait: true } });
 export const runResult = (id: number) => api.GET("/v0/runs/{id}", { params: { path: { id } } });
 export const traceForRun = (id: number) => api.GET("/v0/runs/{id}/trace", { params: { path: { id } } });
-export const startPublish = (name: string) => api.POST("/v0/agents/{name}/publish", { params: { path: { name } } });
+// The runtime also accepts the draft text to publish; the contract does not declare that body, hence the cast.
+export const startPublish = (name: string, spec?: string) =>
+  api.POST("/v0/agents/{name}/publish", { params: { path: { name } }, ...(spec ? { body: { spec } as never } : {}) });
 export const publishRun = (id: number) => api.GET("/v0/publish-runs/{id}", { params: { path: { id } } });
 export const reviewCase = (id: number, caseId: string, decision: "approve" | "edit" | "reject", reason?: string, editedCase?: Record<string, unknown>) =>
   api.POST("/v0/publish-runs/{id}/cases/{case}/review", {
@@ -89,3 +93,4 @@ export const dryRunCase = (id: number, caseId: string) => api.POST("/v0/publish-
 export const continuePublish = (id: number) => api.POST("/v0/publish-runs/{id}/continue", { params: { path: { id } } });
 export const listApprovals = (status: "pending" | "decided" | "all") => api.GET("/v0/approvals", { params: { query: { status } } });
 export const decideApproval = (id: number, decision: "approved" | "rejected") => api.POST("/v0/approvals/{id}", { params: { path: { id } }, body: { decision } });
+export const metrics = (query: { team?: string; agent?: string; from?: string; to?: string }) => api.GET("/v0/metrics", { params: { query } });

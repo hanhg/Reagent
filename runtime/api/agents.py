@@ -50,6 +50,150 @@ def _visible(doc: dict[str, Any], is_admin: bool, team: str | None) -> bool:
     return md.get("level") == "team" and md.get("team") == team
 
 
+def _db_mode() -> bool:
+    return os.environ.get("REAGENT_LAYERS", "files").lower() == "db"
+
+
+def _measured(names: list[str]) -> dict[str, dict[str, Any]]:
+    """Per-agent results from the database: latest CI pass rate, production success
+    rate and 30-day cost/volume. Empty outside db mode, or if the query fails: the
+    collection still lists agents, with these columns null."""
+    if not names or not _db_mode():
+        return {}
+    import psycopg
+    try:
+        with psycopg.connect(os.environ.get("DATABASE_URL") or "", connect_timeout=15) as c:
+            rows = c.execute("""
+                SELECT a.name,
+                  (SELECT e.pass_rate FROM eval_runs e JOIN agent_versions v ON v.id = e.agent_version_id
+                    WHERE v.agent_id = a.id AND e.kind = 'ci' AND e.pass_rate IS NOT NULL
+                    ORDER BY e.created_at DESC LIMIT 1),
+                  (SELECT e.pass_rate FROM eval_runs e JOIN agent_versions v ON v.id = e.agent_version_id
+                    WHERE v.agent_id = a.id AND e.kind = 'production' AND e.pass_rate IS NOT NULL
+                    ORDER BY e.created_at DESC LIMIT 1),
+                  r.avg_cost, coalesce(r.n, 0), r.ok, r.done
+                FROM agents a
+                LEFT JOIN LATERAL (
+                  SELECT avg(x.cost_usd) AS avg_cost, count(*) AS n,
+                         count(*) FILTER (WHERE x.status = 'succeeded') AS ok,
+                         count(*) FILTER (WHERE x.status IN ('succeeded','failed','denied','cancelled')) AS done
+                  FROM runs x JOIN agent_versions v ON v.id = x.agent_version_id
+                  WHERE v.agent_id = a.id AND x.parent_run_id IS NULL
+                    AND x.started_at >= now() - interval '30 days') r ON true
+                WHERE a.name = ANY(%s)""", (names,)).fetchall()
+            status: dict[str, dict[str, str]] = {}
+            for name, version, st in c.execute(
+                    "SELECT a.name, v.version, v.status FROM agent_versions v JOIN agents a ON a.id = v.agent_id "
+                    "WHERE a.name = ANY(%s)", (names,)):
+                status.setdefault(name, {})[version] = st
+    except Exception:  # noqa: BLE001
+        return {}
+    out = {}
+    for name, ci, prod, avg_cost, n, ok, done in rows:
+        out[name] = {"_status": status.get(name, {}), "pass_rate": None if ci is None else float(ci),
+                     "production_success_rate": float(prod) if prod is not None
+                     else (ok / done if done else None),
+                     "avg_cost_usd": None if avg_cost is None else round(float(avg_cost), 6),
+                     "runs_30d": int(n)}
+    return out
+
+
+def _drafts() -> dict[str, dict[str, Any]]:
+    from runtime.resolver.source import _DRAFTS
+    return _DRAFTS
+
+
+def _versions(cat: Catalog, name: str) -> list[dict[str, Any]]:
+    """Version history, newest first. The database knows status and who published;
+    the files know only which versions exist."""
+    from runtime.resolver.source import _DRAFTS, semver_key
+    if _db_mode():
+        import psycopg
+        try:
+            with psycopg.connect(os.environ.get("DATABASE_URL") or "", connect_timeout=15) as c:
+                rows = c.execute("""
+                    SELECT v.version, v.status, v.published_at, u.name
+                    FROM agent_versions v JOIN agents a ON a.id = v.agent_id
+                    LEFT JOIN users u ON u.id = v.published_by
+                    WHERE a.name = %s""", (name,)).fetchall()
+            out = [{"version": v, "status": s, "published_at": at.isoformat() if at else None,
+                    "published_by": by} for v, s, at, by in rows]
+            return sorted(out, key=lambda r: semver_key(r["version"]), reverse=True)
+        except Exception:  # noqa: BLE001
+            pass
+    draft = _DRAFTS.get(name)
+    return [{"version": v, "published_at": None, "published_by": None,
+             "status": "draft" if draft is not None and draft is doc else "published"}
+            for v, doc in sorted(cat.agent_versions(name).items(), key=lambda kv: semver_key(kv[0]),
+                                 reverse=True)]
+
+
+def _summary(cat: Catalog, doc: dict[str, Any], status: str | None,
+             measured: dict[str, Any]) -> dict[str, Any]:
+    md, spec = doc["metadata"], doc.get("spec") or {}
+    measured = dict(measured)
+    status = measured.pop("_status", {}).get(str(md.get("version")), status)
+    forked = md.get("forked_from")
+    update = False
+    if isinstance(forked, str) and "@" in forked:
+        from runtime.resolver.source import semver_key
+        src_name, src_version = forked.rsplit("@", 1)
+        src = cat.latest(src_name)
+        update = src is not None and semver_key(str(src["metadata"]["version"])) > semver_key(src_version)
+    return {"name": md["name"], "version": str(md.get("version", "")), "status": status,
+            "team": md.get("team"), "level": md.get("level", "team"),
+            "description": (spec.get("use_case") or {}).get("description", ""),
+            "desired_outcome": (spec.get("use_case") or {}).get("desired_outcome"),
+            "tags": md.get("tags") or [], "forked_from": forked, "update_available": update,
+            "pass_rate": None, "production_success_rate": None, "avg_cost_usd": None,
+            "runs_30d": 0, **measured}
+
+
+@router.get("/agents")
+def get_agents(q: str | None = None, tag: str | None = None,
+               x_reagent_user: str | None = Header(default=None)):
+    """The caller's collection. Visibility is filtered here (SPEC.md §2). Ranked on
+    desired outcome and name matches first, then measured pass rate."""
+    cat = load_catalog()
+    _, is_admin, team = _principal(cat, x_reagent_user)
+    docs = [d for d in (cat.latest(n) for n in sorted(cat.agents)) if d and _visible(d, is_admin, team)]
+    if tag:
+        docs = [d for d in docs if tag in (d["metadata"].get("tags") or [])]
+    terms = (q or "").lower().split()
+
+    def score(d: dict[str, Any]) -> int | None:
+        md, uc = d["metadata"], (d.get("spec") or {}).get("use_case") or {}
+        strong = f"{md['name']} {uc.get('desired_outcome') or ''} {' '.join(md.get('tags') or [])}".lower()
+        weak = f"{uc.get('description') or ''}".lower()
+        if not all(t in strong or t in weak for t in terms):
+            return None
+        return sum(2 if t in strong else 1 for t in terms)
+
+    scored = [(s, d) for d in docs if (s := score(d)) is not None]
+    measured = _measured([d["metadata"]["name"] for _, d in scored])
+    drafts = set(_drafts())
+    out = [_summary(cat, d, "draft" if d["metadata"]["name"] in drafts else "published",
+                    measured.get(d["metadata"]["name"], {})) for _, d in scored]
+    ranks = {d["metadata"]["name"]: s for s, d in scored}
+    out.sort(key=lambda a: (-ranks[a["name"]], -(a["pass_rate"] or 0), a["name"]))
+    return {"agents": out}
+
+
+@router.get("/agents/{name}")
+def get_agent(name: str, x_reagent_user: str | None = Header(default=None)):
+    cat = load_catalog()
+    _, is_admin, team = _principal(cat, x_reagent_user)
+    doc = cat.latest(name)
+    if doc is None or not _visible(doc, is_admin, team):
+        raise HTTPException(404, "not found")  # deliberately indistinguishable
+    versions = _versions(cat, name)
+    current = next((v for v in versions if v["version"] == str(doc["metadata"].get("version"))), None)
+    out = _summary(cat, doc, current["status"] if current else None, _measured([name]).get(name, {}))
+    out["spec_yaml"] = yaml.safe_dump(doc, sort_keys=False)
+    out["versions"] = versions
+    return out
+
+
 @router.get("/agents/{name}/resolved")
 def get_resolved(name: str, x_reagent_user: str | None = Header(default=None)):
     cat = load_catalog()                       # SPEC.md §1: re-read every layer, every time
